@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京图批存
 // @namespace    https://github.com/WenLiu6677/jingtu-picun
-// @version      1.4.2
+// @version      1.4.3
 // @description  一键下载京东商品详情页的全部详情图，批量下载只需选择一次保存文件夹
 // @author       Wenl
 // @homepageURL  https://github.com/WenLiu6677/jingtu-picun
@@ -13,7 +13,7 @@
 // @grant        unsafeWindow
 // @connect      in.m.jd.com
 // @connect      *.360buyimg.com
-// @license      MIT
+// @license      CC-BY-NC-SA-4.0
 // ==/UserScript==
 
 (function () {
