@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         京图批存
 // @namespace    https://github.com/WenLiux/jingtu-picun
-// @version      1.4.3
+// @version      1.4.4
 // @description  一键下载京东商品详情页的全部详情图，批量下载只需选择一次保存文件夹
 // @author       Wenl
 // @homepageURL  https://github.com/WenLiux/jingtu-picun
@@ -558,19 +558,46 @@
     throw new Error('当前浏览器不支持文件夹批量保存，请使用最新版 Chrome 或 Edge');
   }
 
-  function fetchImageBlob(imgInfo) {
+  function isImageData(buffer) {
+    const bytes = new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 12));
+    const isJpeg = bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+    const isPng = bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
+    const isWebp = bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46
+      && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50;
+    return isJpeg || isPng || isWebp;
+  }
+
+  function fetchImageData(imgInfo) {
     return new Promise((resolve, reject) => {
       GM_xmlhttpRequest({
         method: 'GET',
         url: imgInfo.url,
         headers: { Referer: 'https://item.jd.com/' },
-        responseType: 'blob',
+        responseType: 'arraybuffer',
         timeout: DOWNLOAD_TIMEOUT,
-        onload(resp) {
-          if (resp.status >= 200 && resp.status < 300 && resp.response) {
-            resolve(resp.response);
-          } else {
+        async onload(resp) {
+          if (resp.status < 200 || resp.status >= 300 || !resp.response) {
             reject(new Error(`图片请求失败: HTTP ${resp.status}`));
+            return;
+          }
+
+          try {
+            let data = resp.response;
+            if (data && typeof data.arrayBuffer === 'function') {
+              data = await data.arrayBuffer();
+            } else if (ArrayBuffer.isView(data)) {
+              data = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+            }
+
+            if (!data || typeof data.byteLength !== 'number' || data.byteLength === 0) {
+              throw new Error('图片响应为空');
+            }
+            if (!isImageData(data)) {
+              throw new Error('服务器返回的不是有效图片');
+            }
+            resolve(data);
+          } catch (err) {
+            reject(err);
           }
         },
         onerror: () => reject(new Error('图片请求失败')),
@@ -580,13 +607,22 @@
   }
 
   async function saveImageToDirectory(imgInfo, directoryHandle) {
-    const blob = await fetchImageBlob(imgInfo);
+    const data = await fetchImageData(imgInfo);
     const fileHandle = await directoryHandle.getFileHandle(imgInfo.name, { create: true });
     const writable = await fileHandle.createWritable();
     try {
-      await writable.write(blob);
-    } finally {
+      await writable.write(data);
       await writable.close();
+    } catch (err) {
+      if (typeof writable.abort === 'function') {
+        try { await writable.abort(); } catch (_) { /* ignore cleanup errors */ }
+      }
+      throw err;
+    }
+
+    const savedFile = await fileHandle.getFile();
+    if (savedFile.size !== data.byteLength) {
+      throw new Error(`写入校验失败: ${savedFile.size}/${data.byteLength} 字节`);
     }
   }
 
@@ -655,7 +691,8 @@
       if (failures.length === 0) {
         toast(`全部 ${succeeded} 张图片已保存到“${directoryHandle.name}”`, 'success');
       } else {
-        toast(`下载完成：成功 ${succeeded} 张，失败 ${failures.length} 张`, 'error');
+        const firstError = failures[0].error && failures[0].error.message || '未知错误';
+        toast(`保存失败 ${failures.length} 张：${firstError}`, 'error');
       }
     } finally {
       btnEl.disabled = false;
